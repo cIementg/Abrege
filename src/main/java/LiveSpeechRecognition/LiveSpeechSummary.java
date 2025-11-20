@@ -7,8 +7,14 @@ import javax.sound.sampled.*;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 public class LiveSpeechSummary {
+
+    // ---------- CONTEXTE GLOBAL DES RÉSUMÉS ----------
+    private static final StringBuilder history = new StringBuilder();
+    // Limite du contexte envoyé au modèle (pour éviter prompts trop longs)
+    private static final int MAX_CONTEXT_CHARS = 2000;
 
     public static void main(String[] args) {
 
@@ -28,7 +34,7 @@ public class LiveSpeechSummary {
             microphone.start();
 
             Recognizer recognizer = new Recognizer(model, 16000);
-            byte[] buffer = new byte[4096];
+            byte[] buffer = new byte[8192];
 
             System.out.println("\n🎤 Parle maintenant…\n");
 
@@ -75,6 +81,35 @@ public class LiveSpeechSummary {
         return cleaned;
     }
 
+    // Récupère le contexte courant tronqué et échappé pour JSON
+    private static String getContextForPrompt() {
+        synchronized (history) {
+            if (history.length() == 0) return "";
+            String ctx = history.toString().trim();
+            if (ctx.length() > MAX_CONTEXT_CHARS) {
+                // garder la fin (les résumés les plus récents)
+                ctx = ctx.substring(ctx.length() - MAX_CONTEXT_CHARS);
+            }
+            // échapper les guillemets et backslashes pour injecter en JSON
+            ctx = ctx.replace("\\", "\\\\").replace("\"", "\\\"");
+            return ctx;
+        }
+    }
+
+    // Ajoute un résumé au contexte (thread-safe)
+    private static void appendToHistory(String summary) {
+        if (summary == null || summary.isBlank()) return;
+        synchronized (history) {
+            if (history.length() > 0) history.append(" ");
+            history.append(summary.trim());
+            // Optionnel : limiter la taille physique
+            if (history.length() > MAX_CONTEXT_CHARS * 2) {
+                // tronquer le début si l'historique grandit trop (garder la fin)
+                history.delete(0, history.length() - MAX_CONTEXT_CHARS);
+            }
+        }
+    }
+
     // ---- STREAMING OLLAMA ---- //
     public static void streamSummary(String text) {
 
@@ -84,34 +119,73 @@ public class LiveSpeechSummary {
 
             connection.setRequestMethod("POST");
             connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
 
-            text = text.replace("\"", "\\\"");
+            // Échapper le texte courant
+            String safeText = text.replace("\\", "\\\\").replace("\"", "\\\"");
 
+            // Construire le prompt en incluant le contexte (tronqué)
+            String contextEscaped = getContextForPrompt();
+
+            StringBuilder prompt = new StringBuilder();
+            prompt.append("Tu dois résumer uniquement la phrase actuelle.\n")
+                    .append("Le contexte sert seulement à comprendre, pas à résumer.\n")
+                    .append("Règles :\n")
+                    .append("- Résumé très court, 1 phrase.\n")
+                    .append("- Pas d'ajout.\n")
+                    .append("- Pas d'explication.\n")
+                    .append("- Pas de définition.\n")
+                    .append("- Pas de politesse.\n")
+                    .append("- Pas de reformulation longue.\n")
+                    .append("- Si inutile : 'Rien à résumer'.\n\n");
+
+            if (!contextEscaped.isEmpty()) {
+                prompt.append("Contexte précédent (résumés) : ").append(contextEscaped).append("\n\n");
+            }
+
+            prompt.append("Phrase actuelle : ").append(safeText);
+
+            // JSON body (stream true pour token streaming)
             String body = "{"
-                    + "\"model\": \"gemma3:4b\","
-                    + "\"prompt\": \"Résume de façon très courte, et ne donne pas de définition : " + text + "\","
+                    + "\"model\": \"qwen2.5:1.5b\","
+                    + "\"prompt\": \"" + prompt.toString().replace("\n", "\\n").replace("\r", "") + "\","
                     + "\"stream\": true"
                     + "}";
 
-            OutputStream os = connection.getOutputStream();
-            os.write(body.getBytes());
-            os.flush();
+            byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(bodyBytes.length);
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+            try (OutputStream os = connection.getOutputStream()) {
+                os.write(bodyBytes);
+            }
 
-            String line;
-            while ((line = reader.readLine()) != null) {
+            // lire le stream d'Ollama token par token
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
 
-                if (!line.contains("\"response\""))
-                    continue;
+                String line;
+                StringBuilder summaryCollector = new StringBuilder();
 
-                // On extrait UNIQUEMENT la réponse
-                String token = line.replaceAll(".*\"response\":\"", "")
-                        .replaceAll("\".*", "");
+                while ((line = reader.readLine()) != null) {
 
-                System.out.print(token);
-                System.out.flush();
+                    if (!line.contains("\"response\""))
+                        continue;
+
+                    String token = line.replaceAll(".*\"response\":\"", "")
+                            .replaceAll("\".*", "");
+
+                    // Affiche token par token
+                    System.out.print(token);
+                    System.out.flush();
+
+                    // Accumule pour l'historique
+                    summaryCollector.append(token);
+                }
+
+                // Après la fin du stream, on ajoute le résumé au contexte
+                String finalSummary = summaryCollector.toString().trim();
+                if (!finalSummary.isEmpty() && !finalSummary.equalsIgnoreCase("Rien à résumer")) {
+                    appendToHistory(finalSummary);
+                }
             }
 
         } catch (Exception e) {

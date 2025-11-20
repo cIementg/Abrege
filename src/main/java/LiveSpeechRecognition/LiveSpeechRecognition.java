@@ -34,14 +34,31 @@ public class LiveSpeechRecognition {
 
             while (true) {
                 int bytesRead = microphone.read(buffer, 0, buffer.length);
+
                 if (bytesRead > 0) {
+
+                    // Phrase terminée → résultat final
                     if (recognizer.acceptWaveForm(buffer, bytesRead)) {
-                        System.out.println("Résultat : " + recognizer.getResult());
-                    } else {
-                        System.out.println("Partiel : " + recognizer.getPartialResult());
+                        String result = recognizer.getResult().replace("\n", "");
+
+                        // Effacer la ligne de statut
+                        System.out.print("\r\033[K");
+
+                        // Afficher proprement le résultat détecté
+                        System.out.println("🟢 Phrase détectée : " + result);
+                    }
+
+                    // Phrase en cours → mise à jour sur la même ligne
+                    else {
+                        String partial = recognizer.getPartialResult().replace("\n", "");
+
+                        // Réécrit la ligne continue
+                        System.out.print("\rÉcoute… " + partial);
+                        System.out.flush();
                     }
                 }
             }
+
 
         } catch (Exception e) {
             e.printStackTrace();

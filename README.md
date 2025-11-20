@@ -26,22 +26,38 @@ Ce projet Spring Boot propose une reconnaissance vocale française en temps rée
 - Le fichier `src/main/resources/application.properties` comporte les paramètres audio et les URLs (Vosk/Ollama). Ajustez-les si besoin.
 - Si vous changez l’emplacement du modèle, exposez le chemin via une propriété (`vosk.model-path`) et mettez-le à jour dans la configuration Java correspondante.
 
-### 5. Lancement
+### 5. Lancement backend (Spring + Vosk + Ollama)
 ```bash
 ./gradlew bootRun
 ```
-Puis parler dans votre micro : le flux texte apparaît dans la console et le résumé généré par Ollama suit.
+L’application démarre la capture micro locale, diffuse les transcriptions via SSE (`/api/live/stream`) et interroge Ollama pour chaque phrase validée.
 
-### 6. Tests rapides
+> ⚠️ Spring doit tourner sur la même machine que le micro (et Ollama). Vérifie que `ollama serve` est lancé et que le modèle défini dans `application.properties` a bien été `pull`.
+
+### 6. Lancement du frontend React
+
+```bash
+cd frontend
+npm install    # une fois
+npm run dev    # http://localhost:5173
+```
+
+Le front ouvre automatiquement un `EventSource` sur `/api/live/stream` (proxy Vite ou CORS). Tu visualises :
+
+- la phrase en cours d’écoute,
+- l’historique des transcriptions validées,
+- le résumé généré en live par Ollama.
+
+### 7. Tests rapides
 - Vérifier la reconnaissance brute : désactiver temporairement l’appel Ollama pour valider que Vosk fonctionne (classe `LiveSpeechRecognition`).
 - Vérifier la chaîne complète : relancer Ollama, observer les logs de `LiveSpeechSummary`.
 
-### 7. Dépannage
+### 8. Dépannage
 - **Pas de son détecté** : s’assurer que la source micro par défaut est accessible à la JVM.
 - **Erreur modèle Vosk** : vérifier le renommage en `model` et les droits de lecture.
 - **Timeout Ollama** : relancer `ollama serve`, vérifier la RAM disponible et que votre modèle est bien téléchargé.
 
-### 8. Aller plus loin
+### 9. Aller plus loin
 - Ajouter d’autres voix/langues en téléchargeant des modèles Vosk supplémentaires.
 - Expérimenter différents LLM via `ollama pull`.
 - Intégrer une interface web (WebSocket) pour diffuser transcription et résumé en live.
